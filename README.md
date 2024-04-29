@@ -14,6 +14,11 @@ For running Task 1 and Task 2：
 - Before you run Task 1 and Task 2, please run first `python3 preprocessing.py` to generate .json files for each dataset.
 - Now, you can use the command **sh run_task12.sh** in your terminal to run the code for Task 1 and Task 2.
 
+A trained model for STAC (eng.sdrt.stac) for Task 1 has been provided in this forked repo:
+(https://drive.google.com/drive/folders/1bUoQMV5Zzvt7iUubtMTbhXTuwYwHTSPo?usp=sharing)
+
+It is only able to achieve a test F1=0.9593, unlike the F1=0.9584 in the paper.
+
 ## Task 3
 To run the code of task 3, you should do like the follows:
 1. prepare data. Put all the raw corpora under the folder "data/dataset".
