@@ -410,6 +410,7 @@ def main():
     if torch.cuda.is_available():
         args.n_gpu = 1
         device = torch.device("cuda:0")
+        print("Device:", device)
     else:
         device = torch.device("cpu")
         args.n_gpu = 0
@@ -725,6 +726,9 @@ def main():
             args.trained_model = "por.pdtb.crpc"
         elif args.dataset == "tur.pdtb.tedm":
             checkpoint_file = "data/result/tur.pdtb.tdb/bilstm+crf+bert/tur.pdtb.tdb_bilstm+crf/checkpoint_10/pytorch_model.bin"
+            args.trained_model = "tur.pdtb.tdb"
+        elif args.dataset == "eng.sdrt.stac":
+            checkpoint_file = "data/result/eng.sdrt.stac/bilstm+crf+roberta/eng.sdrt.stac_bilstm+crf/checkpoint_10/pytorch_model.bin"
             args.trained_model = "tur.pdtb.tdb"
         if args.do_dev:
             if args.bagging:
