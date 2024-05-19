@@ -405,8 +405,77 @@ def evaluate_new(model, args, dataloader, tokenizer, epoch, desc="dev", write_fi
     score_dict = get_scores(gold_file, pred_file)
     return score_dict
 
+def inference(model, args, dataloader, tokenizer, epoch, desc="dev", write_file=False, nb4bag=None):
+    all_input_ids = None
+    all_attention_mask = None
+    # all_label_ids = None
+    all_pred_ids = None
+
+    all_preds = []
+
+    for batch in tqdm(dataloader, desc=desc):
+        print(batch)
+        batch = tuple(t.to(args.device) if not isinstance(t, str) else None for t in batch if not isinstance(t, str))
+        if args.run_plus:
+            inputs = {
+                "input_ids": batch[0],
+                "attention_mask": batch[1],
+                "labels": batch[2],
+                "flag": "Eval",
+                "pos1_ids": batch[4],
+                "pos2_ids": batch[5],
+                "ft_embeds": batch[6]
+            }
+        else:
+            inputs = {
+                "input_ids": batch[0],
+                "attention_mask": batch[1],
+                "labels": batch[2],
+                "flag": "Eval"
+            }
+        with torch.no_grad():
+            outputs = model(**inputs)
+            preds = outputs[0]
+
+            all_preds.append(preds)
+
+        input_ids = batch[0].detach().cpu().numpy()
+        attention_mask = batch[1].detach().cpu().numpy()
+        label_ids = batch[2].detach().cpu().numpy()
+        og_tok_idxs = batch[3].detach().cpu().numpy()
+        if args.model_type == "bilstm+crf":
+            max_len = args.max_seq_length
+            padded_list = []
+            for l in preds:
+                padded_l = l + [0] * (max_len - len(l))
+                padded_list.append(padded_l)
+
+            pred_ids = np.array(padded_list)
+
+        else:
+            pred_ids = preds.detach().cpu().numpy()
+        
+        if all_input_ids is None:
+            all_input_ids = input_ids
+            all_attention_mask = attention_mask
+            all_label_ids = label_ids
+            all_pred_ids = pred_ids
+            all_tok_idxs = og_tok_idxs
+        else:
+            all_input_ids = np.append(all_input_ids, input_ids, axis=0)
+            all_attention_mask = np.append(all_attention_mask, attention_mask, axis=0)
+            all_label_ids = np.append(all_label_ids, label_ids, axis=0)
+            all_pred_ids = np.append(all_pred_ids, pred_ids, axis=0)
+            all_tok_idxs = np.append(all_tok_idxs, og_tok_idxs, axis=0)
+
+    return all_preds, input_sents
+        
+
 def main():
     args = get_argparse().parse_args()
+
+    print(args)
+
     if torch.cuda.is_available():
         args.n_gpu = 1
         device = torch.device("cuda:0")
@@ -502,15 +571,20 @@ def main():
     dev_data_file = os.path.join(data_dir, "{}_dev.json".format(args.dataset))
     test_data_file = os.path.join(data_dir, "{}_test.json".format(args.dataset))
 
-    if os.path.exists(train_data_file):
-        label_dict, label_list = token_labels_from_file(train_data_file)
-        tok_pos_1, tok_pos_2, tok_pos_1_dict, tok_pos_2_dict = token_pos_from_file(train_data_file)
-    else:
-        label_dict, label_list = token_labels_from_file(dev_data_file)
-        tok_pos_1, tok_pos_2, tok_pos_1_dict, tok_pos_2_dict = token_pos_from_file(dev_data_file)
+    if args.do_train or args.do_dev:
+        if os.path.exists(train_data_file):
+            label_dict, label_list = token_labels_from_file(train_data_file)
+            tok_pos_1, tok_pos_2, tok_pos_1_dict, tok_pos_2_dict = token_pos_from_file(train_data_file)
+        else:
+            label_dict, label_list = token_labels_from_file(dev_data_file)
+            tok_pos_1, tok_pos_2, tok_pos_1_dict, tok_pos_2_dict = token_pos_from_file(dev_data_file)
 
-    args.train_data_file, args.dev_data_file, args.test_data_file = train_data_file, dev_data_file, test_data_file
-    args.label_dict, args.label_list, args.num_labels = label_dict, label_list, len(label_list)
+        args.train_data_file, args.dev_data_file, args.test_data_file = train_data_file, dev_data_file, test_data_file
+        args.label_dict, args.label_list, args.num_labels = label_dict, label_list, len(label_list)
+    else:
+        args.num_labels = 2
+        args.label_dict = {'BeginSeg=Yes': 0, '_': 1}
+        args.label_list = ['BeginSeg=Yes', '_']
 
     output_dir = os.path.join(args.output_dir, args.dataset)
     output_dir = os.path.join(output_dir, "{}+{}".format(args.model_type, args.encoder_type))
@@ -593,11 +667,18 @@ def main():
         # MyDataset = SegDataset
         MyDataset = SegDataset4Bag
     else:
-        dataset_params = {
-            "tokenizer": tokenizer,
-            "max_seq_length": args.max_seq_length,
-            "label_dict": label_dict,
-        }
+        if not args.do_test:
+            dataset_params = {
+                "tokenizer": tokenizer,
+                "max_seq_length": args.max_seq_length,
+                "label_dict": label_dict,
+            }
+        else:
+            dataset_params = {
+                "tokenizer": tokenizer,
+                "max_seq_length": args.max_seq_length,
+                "label_dict": [],
+            }
 
         MyDataset = SegDataset3
     if args.model_type.lower() == "base":
@@ -625,33 +706,33 @@ def main():
             print("Total size of the training dataset for " + train_data_file + " is " + str(train_dataset.__len__()))
             train_dataloader = get_dataloader(train_dataset, args, mode="train")
         tok_pos_1_dev, tok_pos_2_dev, tok_pos_1_dict_dev, tok_pos_2_dict_dev = token_pos_from_file(dev_data_file)
-    if args.run_plus:
-        dev_dataset_params = {
-            "tokenizer": tokenizer,
-            "max_seq_length": args.max_seq_length,
-            "label_dict": label_dict,
-            "pos1_dict": tok_pos_1_dict_dev,
-            "pos1_list": tok_pos_1_dev,
-            "pos1_convert": args.pos1_convert,
-            "pos2_dict": tok_pos_2_dict_dev,
-            "pos2_list": tok_pos_2_dev,
-            "pos2_convert": args.pos2_convert,
-        }
-        extra_feat_len = train_dataset.get_extra_feat_len()
-        args.extra_feat_dim = extra_feat_len
-        dev_dataset = MyDataset(dev_data_file, params=dev_dataset_params)
-    elif args.bagging:
-        dev_dataset_params = {
-            "tokenizer": tokenizer,
-            "max_seq_length": args.max_seq_length,
-            "label_dict": label_dict,
-        }
-        dev_dataset = SegDataset3(dev_data_file, params=dev_dataset_params)
-    else:
-        dev_dataset = MyDataset(dev_data_file, params=dataset_params)
-    print("Total size of the dev dataset for " + dev_data_file + " is " + str(dev_dataset.__len__()))
+        if args.run_plus:
+            dev_dataset_params = {
+                "tokenizer": tokenizer,
+                "max_seq_length": args.max_seq_length,
+                "label_dict": label_dict,
+                "pos1_dict": tok_pos_1_dict_dev,
+                "pos1_list": tok_pos_1_dev,
+                "pos1_convert": args.pos1_convert,
+                "pos2_dict": tok_pos_2_dict_dev,
+                "pos2_list": tok_pos_2_dev,
+                "pos2_convert": args.pos2_convert,
+            }
+            extra_feat_len = train_dataset.get_extra_feat_len()
+            args.extra_feat_dim = extra_feat_len
+            dev_dataset = MyDataset(dev_data_file, params=dev_dataset_params)
+        elif args.bagging:
+            dev_dataset_params = {
+                "tokenizer": tokenizer,
+                "max_seq_length": args.max_seq_length,
+                "label_dict": label_dict,
+            }
+            dev_dataset = SegDataset3(dev_data_file, params=dev_dataset_params)
+        else:
+            dev_dataset = MyDataset(dev_data_file, params=dataset_params)
+        print("Total size of the dev dataset for " + dev_data_file + " is " + str(dev_dataset.__len__()))
 
-    print(test_data_file)
+        print(test_data_file)
 
 
 
@@ -681,16 +762,16 @@ def main():
             test_dataset = SegDataset3(test_data_file, params=test_dataset_params)
 
         else:
-            test_dataset = MyDataset(test_data_file, params=dataset_params)
+            test_dataset = MyDataset(test_data_file, params=dataset_params, mode="test")
 
 
     else:
         test_dataset = None
 
 
-    print("Total size of the test dataset for " + test_data_file + " is " + str(test_dataset.__len__()))
+    # print("Total size of the test dataset for " + test_data_file + " is " + str(test_dataset.__len__()))
 
-    dev_dataloader = get_dataloader(dev_dataset, args, mode="dev")
+    # dev_dataloader = get_dataloader(dev_dataset, args, mode="dev")
 
     if test_dataset is not None:
         test_dataloader = get_dataloader(test_dataset, args, mode="test")
@@ -729,7 +810,10 @@ def main():
             args.trained_model = "tur.pdtb.tdb"
         elif args.dataset == "eng.sdrt.stac":
             checkpoint_file = "data/result/eng.sdrt.stac/bilstm+crf+roberta/eng.sdrt.stac_bilstm+crf/checkpoint_10/pytorch_model.bin"
-            args.trained_model = "tur.pdtb.tdb"
+            args.trained_model = "eng.sdrt.stac"
+        elif args.dataset == "eng.sdrt.malaysia_hansard":
+            checkpoint_file = "data/result/eng.sdrt.stac/bilstm+crf+roberta/eng.sdrt.stac_bilstm+crf/checkpoint_10/pytorch_model.bin"
+            args.trained_model = "eng.sdrt.stac"
         if args.do_dev:
             if args.bagging:
                 dev_dataset = SegDataset3(dev_data_file, params=dataset_params)
@@ -765,9 +849,19 @@ def main():
                     # print(" Dev: acc=%.4f, p=%.4f, r=%.4f, f1=%.4f\n" % (acc, p, r, f1))
                 if args.do_test:
                     #evaluate(model, args, test_dataloader, tokenizer, epoch, desc="test", write_file=True)
-                    score_dict = evaluate_new(model, args, test_dataloader, tokenizer, epoch, desc="test", write_file=False)
+                    all_preds = inference(model, args, test_dataloader, tokenizer, epoch, desc="test", write_file=False)
                     print(args.dataset)
-                    print("\nTest: F1=%.4f\n" % (score_dict["f_score"]))
+
+                    inputs = []
+                    with open(test_data_file, 'r') as f:
+                        for line in f.readlines():
+                            line_content = json.loads(line)
+                            for sent in line_content["doc_sents"]:
+                                inputs.append(sent)
+
+                    for input, preds in zip(inputs, all_preds):
+                        print(input)
+                        print(preds)
                     # print(" Test: acc=%.4f, p=%.4f, r=%.4f, f1=%.4f\n" % (acc, p, r, f1))
             print()
 

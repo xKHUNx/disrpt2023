@@ -340,6 +340,230 @@ class SegDataset3(Dataset):
         mask = (self.attention_mask[index] > 0)
         return self.input_ids[index], mask, self.label_ids[index], self.tok_start_idxs[index]
 
+class SegDataset3(Dataset):
+    '''New version dataset for the task1 and task2 it can fix the UNK token problem'''
+    '''Generate the dataset for task1 Segmentation'''
+
+    def __init__(self, file_name, params, mode="train"):
+        self.max_seq_length = params["max_seq_length"]
+        self.tokenizer = params["tokenizer"]
+        self.label_dict = params["label_dict"]
+        self.mode = "test"
+
+        self._init_dataset(file_name)
+
+    # read the data
+    def _init_dataset(self, data_path):
+        """
+        Args:
+            file_name: data path
+        """
+        default_label = "_"
+
+        sent_list = []
+        all_texts = []
+        with open(data_path, 'r') as f:
+            for line in f.readlines():
+                line_content = json.loads(line)
+                all_texts.append(line_content)
+        for doc in all_texts:
+            doc_token_list = doc["doc_sents"]
+
+            # serious bug in the rus.rst.rrt data
+            # in test tok file line 18988, it's an unknown string, cannot read and operate
+            if doc["doc_id"] == "sci.comp_53" and "rus.rst.rrt_test" in data_path:
+                doc_token_list[0][0] = "-"
+            for i in range(len(doc_token_list)):
+                # bugs in tur.pdtb.tdb
+                if "tur.pdtb.tdb" in data_path:
+                    for t in range(len(doc_token_list[i])):
+                        if doc_token_list[i][t] == "":
+                             doc_token_list[i][t] = "-"
+                if "spa.rst.rststb" in data_path:
+                    for t in range(len(doc_token_list[i])):
+                        if doc_token_list[i][t] == "\x91":
+                             doc_token_list[i][t] = "_"
+                sent_list.append(doc_token_list[i])
+
+
+        self.sents, self.ids, self.tok_start_idxs, self.speakers = [], [], [], []
+        tmp_words, tmp_sent_token_ids, tmp_masks, subword_lengths = [], [], [], []
+
+        for tokens in sent_list:
+            og_index = np.zeros(self.max_seq_length, dtype=np.int32)
+            subword_index = 1
+            for t in range(len(tokens)):
+                truncated_index = 0
+
+                tmp_subtoks = self.tokenizer.tokenize(tokens[t])
+                subword_lengths.append(len(tmp_subtoks))
+                #if truncated_index + len(tmp_subtoks) < self.max_seq_length - 2 and subword_index + len(tmp_subtoks) < self.max_seq_length - 2:
+                #if subword_index + len(tmp_subtoks) < self.max_seq_length - 2:
+                if (len(tmp_words) + len(tmp_subtoks)) < self.max_seq_length - 3:
+                    truncated_index = truncated_index + len(tmp_subtoks)
+                    og_index[subword_index] = 1
+                    subword_index += len(tmp_subtoks)
+
+                    tmp_words += tmp_subtoks
+                    
+                else:
+                    temp_sent = [self.tokenizer.cls_token] + tmp_words + [self.tokenizer.sep_token]
+                    temp_sent_label = [default_label] + tmp_labels + [default_label]
+                    self.sents.append(temp_sent)
+                    self.labels.append(temp_sent_label)
+                    self.tok_start_idxs.append(og_index)
+                    og_index = np.zeros(self.max_seq_length, dtype=np.int32)
+                    subword_index = 1
+                    og_index[subword_index] = 1
+                    tmp_words, tmp_labels = [], []
+                    tmp_words += tmp_subtoks
+
+            if len(tmp_words) > 0:
+                temp_sent = [self.tokenizer.cls_token] + tmp_words + [self.tokenizer.sep_token]
+                self.sents.append(temp_sent)
+                self.tok_start_idxs.append(og_index)
+
+                tmp_words = []
+
+        for sent in self.sents:
+            # convert to ids
+            tmp_tok_ids = self.tokenizer.convert_tokens_to_ids(sent)
+
+            # unify the sequence length
+            input_ids = np.ones(self.max_seq_length, dtype=np.int32)
+            attention_mask = np.zeros(self.max_seq_length, dtype=np.int32)
+
+            input_ids = input_ids * self.tokenizer.pad_token_id
+            input_ids[:len(tmp_tok_ids)] = tmp_tok_ids
+            attention_mask[:len(tmp_tok_ids)] = 1
+
+            # put together
+            tmp_sent_token_ids.append(input_ids)
+            tmp_masks.append(attention_mask)
+            tmp_words, subword_lengths = [], []
+            too_long_flag = False
+        self.input_ids = np.array(tmp_sent_token_ids)
+        self.attention_mask = np.array(tmp_masks)
+        self.total_size = len(tmp_sent_token_ids)
+        self.tok_start_idxs = np.array(self.tok_start_idxs)
+
+    def __len__(self):
+        return self.total_size
+
+    def __getitem__(self, index):
+        mask = (self.attention_mask[index] > 0)
+        # print("i and sent", index, self.sents[index])
+        return self.input_ids[index], mask, 0, self.tok_start_idxs[index]
+
+class CustomDataset(Dataset):
+    """
+    Modified from SegDataset3 to accomodate for inferencing on custom dataset.
+    """
+
+    def __init__(self, file_name, params):
+        self.max_seq_length = params["max_seq_length"]
+        self.tokenizer = params["tokenizer"]
+        self.label_dict = params["label_dict"]
+
+        self._init_dataset(file_name)
+
+    # read the data
+    def _init_dataset(self, data_path):
+        """
+        Args:
+            file_name: data path
+        """
+        default_label = "_"
+
+        sent_list = []
+        self.speaker_list = []
+        self.sentences = []
+        with open(data_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        # Iterate each agenda
+        for agenda in data["agendas"]:
+            # Load all tokens
+            doc_token_list = [sent["translated_content_token"] for sent in agenda["translated_sentences"]]
+            # Load all speakers
+            doc_speaker_list = [sent["speaker"] for sent in agenda["translated_sentences"]]
+
+            for i in range(len(doc_token_list)):
+               sent_list.append(doc_token_list[i])
+               self.sentences.append(doc_token_list[i])
+               self.speaker_list.append(doc_speaker_list[i])
+
+        self.sents, self.ids, self.tok_start_idxs = [], [], []
+        tmp_words, tmp_sent_token_ids, tmp_masks, subword_lengths = [], [], [], []
+
+        for tokens in sent_list:
+            og_index = np.zeros(self.max_seq_length, dtype=np.int32)
+            subword_index = 1
+            for t in range(len(tokens)):
+                truncated_index = 0
+
+                tmp_subtoks = self.tokenizer.tokenize(tokens[t])
+                subword_lengths.append(len(tmp_subtoks))
+                #if truncated_index + len(tmp_subtoks) < self.max_seq_length - 2 and subword_index + len(tmp_subtoks) < self.max_seq_length - 2:
+                #if subword_index + len(tmp_subtoks) < self.max_seq_length - 2:
+                if (len(tmp_words) + len(tmp_subtoks)) < self.max_seq_length - 3:
+                    truncated_index = truncated_index + len(tmp_subtoks)
+                    og_index[subword_index] = 1
+                    subword_index += len(tmp_subtoks)
+
+                    tmp_words += tmp_subtoks
+                    
+                else:
+                    temp_sent = [self.tokenizer.cls_token] + tmp_words + [self.tokenizer.sep_token]
+                    temp_sent_label = [default_label] + tmp_labels + [default_label]
+                    self.sents.append(temp_sent)
+                    self.labels.append(temp_sent_label)
+                    self.tok_start_idxs.append(og_index)
+                    og_index = np.zeros(self.max_seq_length, dtype=np.int32)
+                    subword_index = 1
+                    og_index[subword_index] = 1
+                    tmp_words, tmp_labels = [], []
+                    tmp_words += tmp_subtoks
+
+            if len(tmp_words) > 0:
+                temp_sent = [self.tokenizer.cls_token] + tmp_words + [self.tokenizer.sep_token]
+                self.sents.append(temp_sent)
+                self.tok_start_idxs.append(og_index)
+
+                tmp_words = []
+
+        for sent in self.sents:
+            # convert to ids
+            tmp_tok_ids = self.tokenizer.convert_tokens_to_ids(sent)
+
+            # unify the sequence length
+            input_ids = np.ones(self.max_seq_length, dtype=np.int32)
+            attention_mask = np.zeros(self.max_seq_length, dtype=np.int32)
+
+            input_ids = input_ids * self.tokenizer.pad_token_id
+            input_ids[:len(tmp_tok_ids)] = tmp_tok_ids
+            attention_mask[:len(tmp_tok_ids)] = 1
+
+            # put together
+            tmp_sent_token_ids.append(input_ids)
+            tmp_masks.append(attention_mask)
+            tmp_words, subword_lengths = [], []
+            too_long_flag = False
+        self.input_ids = np.array(tmp_sent_token_ids)
+        self.attention_mask = np.array(tmp_masks)
+        self.total_size = len(tmp_sent_token_ids)
+        self.tok_start_idxs = np.array(self.tok_start_idxs)
+
+
+    def __len__(self):
+        return self.total_size
+
+    def __getitem__(self, index):
+        mask = (self.attention_mask[index] > 0)
+        # print("i and sent", index, self.sents[index])
+        return self.input_ids[index], mask, 0, self.tok_start_idxs[index], self.speaker_list[index], " ".join(self.sentences[index])
+
+
 class SegDataset4Bag(Dataset):
     '''New version dataset for the task1 and task2 it can fix the UNK token problem'''
     '''Generate the dataset for task1 Segmentation'''

@@ -6,3 +6,5 @@ pip3 install torchcrf
 pip3 install tqdm
 pip3 install numpy
 pip3 install SentencePiece
+pip3 install stanza==1.8.2
+

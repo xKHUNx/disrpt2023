@@ -332,6 +332,84 @@ def seg_preds_to_file_new2(all_input_ids, all_label_ids, all_attention_mask, all
     return pred_file
 
 
+def seg_preds_to_file_new3(all_input_ids, all_label_ids, all_attention_mask, all_tok_idxs, tokenizer, label_id_dict, input_file, nb4bag=None):
+    """
+    new version of writing a result tok file
+    convert prediction ids to labels, and save the results into a file with the same format as gold_file
+    Args:
+        all_input_ids: predicted tokens' id list
+        all_label_ids: predicted labels' id list
+        all_attention_mask: attention mask of the pre-trained LM
+        label_id_dict: the dictionary map the labels' id to the original string label
+        gold_file: the original .tok file
+    """
+
+    og_tokens = []
+    pred_labels = []
+
+    for i in range(len(all_tok_idxs)):
+        og_toks_ids = all_input_ids[i]
+        og_labels = all_label_ids[i]
+        tmp_toks = tokenizer.convert_ids_to_tokens(og_toks_ids)
+        for j in range(len(all_tok_idxs[i])):
+            if all_tok_idxs[i][j] == 1:
+                og_tokens.append(tmp_toks[j])
+                pred_labels.append(label_id_dict[int(og_labels[j])])
+
+    
+    original_tokens = []
+    with open(input_file, "r", encoding="utf-8") as f:
+        for line in f.readlines():
+            line_content = json.loads(line)
+            original_tokens += line_content["doc_sents"]
+    # original_tokens = flatten_outer_layer(original_n tokens)
+
+    return og_tokens, pred_labels, original_tokens
+
+
+def seg_preds_to_file_new4(all_input_ids, all_label_ids, all_attention_mask, all_tok_idxs, tokenizer, label_id_dict, input_file, nb4bag=None):
+    """
+    new version of writing a result tok file
+    convert prediction ids to labels, and save the results into a file with the same format as gold_file
+    Args:
+        all_input_ids: predicted tokens' id list
+        all_label_ids: predicted labels' id list
+        all_attention_mask: attention mask of the pre-trained LM
+        label_id_dict: the dictionary map the labels' id to the original string label
+        gold_file: the original .tok file
+    """
+    print(len(all_input_ids), len(all_label_ids), len(all_attention_mask), len(all_tok_idxs))
+
+    og_tokens = []
+    pred_labels = []
+
+    for i in range(len(all_tok_idxs)):
+        og_toks_ids = all_input_ids[i]
+        og_labels = all_label_ids[i]
+        tmp_toks = tokenizer.convert_ids_to_tokens(og_toks_ids)
+        for j in range(len(all_tok_idxs[i])):
+            if all_tok_idxs[i][j] == 1:
+                og_tokens.append(tmp_toks[j])
+                pred_labels.append(label_id_dict[int(og_labels[j])])
+
+    
+    original_tokens = []
+    doc_token_list = []
+
+    with open(input_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    # Iterate each agenda
+    for agenda in data["agendas"]:
+        # Load all tokens
+        original_tokens += [sent["translated_content_token"] for sent in agenda["translated_sentences"]]
+        # original_tokens += line_content["doc_sents"]
+    # original_tokens = flatten_outer_layer(original_tokens)
+
+    return og_tokens, pred_labels, original_tokens
+
+
+
 def merge4bag(data_path, gold_tok_file):
     file_names = os.listdir(data_path)
     bagging_files = [data_path + "/" + file_name for file_name in file_names if "test_pred_bag" in file_name]
@@ -592,3 +670,49 @@ def merge_datasets(discourse_type="rst"):
             f.write("%s\n"%(json.dumps(text, ensure_ascii=False)))
 
     return out_file
+
+def flatten_outer_layer(nested_list_of_lists_of_lists):
+    flattened = []
+    for sublist_list in nested_list_of_lists_of_lists:
+        flattened.extend(sublist_list)
+    return flattened
+
+def unflatten_list(flat_list, nested_list):
+    """
+    Reconstruct a nested list based on the structure of a nested list
+    using elements from a flat list.
+    
+    Args:
+        flat_list (list): The flat list containing elements.
+        nested_list (list): The template nested list.
+        
+    Returns:
+        list: A nested list with the same structure as nested_list.
+
+    Example:
+        >>> nested_list = [[1, 2], [3, 4, 5], [6]]
+        >>> flat_list = ["a", "b", "c", "d", "e", "f"]
+        >>> unflattened_list = unflatten_list(flat_list, nested_list)
+        >>> print(unflattened_list)
+        [['a', 'b'], ['c', 'd', 'e'], ['f']]
+    """
+    # Create an iterator from the flat list to keep track of the position
+    it = iter(flat_list)
+    
+    def build(template):
+        """
+        Recursively rebuild the nested structure.
+        
+        Args:
+            template (list): The current nested template part.
+        
+        Returns:
+            list: The rebuilt nested list part.
+        """
+        if isinstance(template, list):
+            return [build(subtemplate) for subtemplate in template]
+        else:
+            # Replace the template element with the next element from the flat list
+            return next(it)
+    
+    return build(nested_list)
