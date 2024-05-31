@@ -464,3 +464,32 @@ for i, speaker in enumerate(raw_result["speakers"]):
             print(token, end=" ")
     print()
     print()
+
+
+# Save as EDUs
+edus = []
+j = 0
+for i, speaker in enumerate(raw_result["speakers"]):
+    content = []
+    for j, (token, pred) in enumerate(zip(raw_result["tokens"][i], raw_result["pred_segments"][i])):
+        if pred == "BeginSeg=Yes":
+            if len(content) > 0:
+                edu = {
+                    "edu_index": j,
+                    "sent_index": i,
+                    "speaker": speaker,
+                    "content": " ".join(content)
+                }
+                # Add to list
+                edus.append(edu)
+                # Increase EDU index count
+                j = j + 1
+            # Restart new list for new EDU segment
+            content = [token]
+        else:
+            # Continue EDU segment
+            content.append(token)
+
+with open("edus_results.json", "w", encoding="utf-8") as f:
+    json.dump({"edus": edus}, f, indent=4,
+              ensure_ascii=False)
